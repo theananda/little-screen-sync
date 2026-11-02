@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Little Screen Parents</title>
+<meta name="theme-color" content="#1f8a5b">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<link rel="stylesheet" href="/base.css">
+<style>
+.lock-out svg{width:16px;height:16px}
+.code{font-family:var(--display);font-size:2.6rem;letter-spacing:.2em;font-variant-numeric:tabular-nums;text-align:center;padding:12px;border-radius:14px;background:var(--sunk)}
+.meter{height:8px;border-radius:999px;background:var(--sunk);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--accent)}
+.meter i.over{background:var(--danger)}
+.stat{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.stat b{font-family:var(--display);font-size:1.6rem;font-variant-numeric:tabular-nums}
+.req-actions{display:flex;flex-wrap:wrap;gap:8px;width:100%}
+.auth{max-width:420px;margin:0 auto;padding-block:48px}
+.status{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+@media (max-width:420px){.bar .pill{display:none}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" role="status" hidden></div>
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const thumbOf = id => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+const initial = s => esc((String(s || "?").replace(/^@/, "")[0] || "?").toUpperCase());
+let toastT;
+function toast(m) { const t = $("#toast"); t.textContent = m; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 3000); }
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined, credentials: "same-origin" });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && !path.startsWith("/api/auth")) { ME = null; render(); throw new Error(j.error || "Please sign in."); }
+  if (!r.ok) throw new Error(j.error || "Something went wrong. Try again.");
+  return j;
+}
+const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="5" width="28" height="20" rx="6" fill="var(--accent)"/><path d="M13 10.5v9l7.5-4.5z" fill="var(--accent-ink)"/><rect x="10" y="27" width="12" height="2.5" rx="1.25" fill="var(--sun)"/></svg>`;
+const OUT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/></svg>`;
+
+let ME = undefined, TAB = location.hash.slice(1) || "requests", authMode = "login";
+const TABS = [["requests", "Requests"], ["allow", "Allowed channels"], ["block", "Blocked channels"], ["videos", "Single videos"], ["words", "Blocked words"], ["devices", "Devices"], ["settings", "Settings"]];
+if (!TABS.some(t => t[0] === TAB)) TAB = "requests";
+let cache = { requests: null, devices: null, preview: null, code: null };
+
+async function boot() {
+  try { ME = await api("GET", "/api/me"); } catch { ME = null; }
+  render();
+}
+function render() {
+  const app = $("#app");
+  if (ME === undefined) { app.innerHTML = ""; return; }
+  if (!ME) { app.innerHTML = authHTML(); wireAuth(); return; }
+  app.innerHTML = shellHTML();
+  wireShell();
+  loadTab();
+}
+
+/* ---------- auth ---------- */
+function authHTML() {
+  const signup = authMode === "signup";
+  return `<div class="wrap auth"><div class="panel">
+    <div class="brand" style="padding:0">${LOGO}<span>Little Screen</span></div>
+    <div><h1>${signup ? "Create a parent account" : "Parent sign in"}</h1>
+    <p class="muted small" style="margin-top:6px">${signup ? "Manage what your children can watch from any phone or computer." : "Manage channels, requests and devices."}</p></div>
+    <form id="authForm" class="field" style="gap:12px" novalidate>
+      <div class="field"><label for="em">Email</label><input id="em" type="email" autocomplete="email" required></div>
+      <div class="field"><label for="pw">Password</label><input id="pw" type="password" autocomplete="${signup ? "new-password" : "current-password"}" required minlength="8">${signup ? `<span class="muted small">At least 8 characters.</span>` : ""}</div>
+      <div id="authMsg"></div>
+      <button class="btn primary">${signup ? "Create account" : "Sign in"}</button>
+    </form>
+    <p class="small muted" style="text-align:center">${signup ? "Already have an account?" : "New here?"} <button class="btn ghost sm" id="authSwap" style="display:inline-flex">${signup ? "Sign in" : "Create an account"}</button></p>
+    <p class="small muted" style="text-align:center"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>
+  </div></div>`;
+}
+function wireAuth() {
+  $("#authSwap").onclick = () => { authMode = authMode === "login" ? "signup" : "login"; render(); };
+  $("#authForm").onsubmit = async e => {
+    e.preventDefault();
+    const btn = e.target.querySelector("button.primary"); btn.disabled = true;
+    try {
+      await api("POST", authMode === "signup" ? "/api/auth/signup" : "/api/auth/login",
+        { email: $("#em").value, password: $("#pw").value, tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      if (authMode === "signup") TAB = "allow";
+      await boot();
+    } catch (err) { $("#authMsg").innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; btn.disabled = false; }
+  };
+}
+
+/* ---------- shell ---------- */
+function shellHTML() {
+  return `<header class="bar"><div class="wrap">
+      <div class="brand">${LOGO}<span>Little Screen</span></div><span class="pill">Parents</span><div class="spacer"></div>
+      <button class="btn sm ghost lock-out" id="signOut" aria-label="Sign out" title="Sign out (${esc(ME.email)})">${OUT}<span>Sign out</span></button>
+    </div></header>
+    <main class="wrap">
+      ${!ME.ytKey ? `<div class="msg bad">The server has no YouTube API key yet, so channels can't be looked up. Set <code>YT_API_KEY</code> in Railway.</div>` : ""}
+      <div class="tabs" role="tablist">${TABS.map(([k, l]) => `<button class="tab" role="tab" aria-selected="${TAB === k}" data-tab="${k}">${l}${k === "requests" && ME.pending ? `<span class="badge">${ME.pending}</span>` : ""}</button>`).join("")}</div>
+      <div id="tabBody"></div>
+    </main>`;
+}
+function wireShell() {
+  $$("[data-tab]").forEach(b => b.onclick = () => { TAB = b.dataset.tab; history.replaceState(null, "", "#" + TAB); render(); });
+  $("#signOut").onclick = async () => { await api("POST", "/api/auth/logout"); ME = null; render(); };
+  $(".tab[aria-selected=true]")?.scrollIntoView({ inline: "nearest", block: "nearest" });
+}
+async function loadTab() {
+  const body = $("#tabBody");
+  const fns = { requests: tabRequests, allow: () => tabChannels("whitelist"), block: () => tabChannels("blacklist"), videos: tabVideos, words: tabWords, devices: tabDevices, settings: tabSettings };
+  try { await fns[TAB](body); } catch (e) { body.innerHTML = `<div class="msg bad">${esc(e.message)}</div>`; }
+}
+async function refreshMe() { ME = await api("GET", "/api/me"); }
+
+/* ---------- requests ---------- */
+async function tabRequests(body) {
+  if (!cache.requests) body.innerHTML = `<div class="panel"><p class="muted">Loading requests…</p></div>`;
+  cache.requests = (await api("GET", "/api/requests")).requests;
+  const pending = cache.requests.filter(r => r.status === "pending"), done = cache.requests.filter(r => r.status !== "pending");
+  const label = { approved: "Video approved", allowed: "Channel allowed", blocked: "Channel blocked", dismissed: "Dismissed" };
+  body.innerHTML = `<div class="panel">
+    <div><h2>Requests</h2><p class="muted small" style="margin-top:4px">When your child finds a video that isn't allowed, they can ask. Requests show up here${ME.telegram.linked ? " and in Telegram" : ""}.</p></div>
+    <div class="list">${pending.length ? pending.map(r => `<div class="item" style="flex-wrap:wrap">
+      <div class="vt"><img src="${thumbOf(r.video.id)}" alt=""></div>
+      <div class="meta"><b>${esc(r.video.title)}</b><span class="muted small">${esc(r.video.channelTitle)} · ${esc(r.device || "a device")} · ${new Date(r.created_at).toLocaleString()}</span>
+        <a class="small" href="https://www.youtube.com/watch?v=${esc(r.video.id)}" target="_blank" rel="noopener">Preview on YouTube</a></div>
+      <div class="req-actions"><button class="btn sm primary" data-req="video" data-id="${r.id}">Approve video</button><button class="btn sm" data-req="channel" data-id="${r.id}">Allow channel</button><button class="btn sm danger" data-req="block" data-id="${r.id}">Block channel</button><button class="btn sm ghost" data-req="no" data-id="${r.id}">Dismiss</button></div>
+    </div>`).join("") : `<div class="empty"><h3>No requests right now</h3><p class="muted small">You're all caught up.</p></div>`}</div>
+  </div>
+  ${done.length ? `<div class="panel"><h3>Past 7 days</h3><div class="list">${done.map(r => `<div class="item"><div class="vt"><img src="${thumbOf(r.video.id)}" alt=""></div><div class="meta"><b>${esc(r.video.title)}</b><span class="muted small">${esc(r.video.channelTitle)}</span></div><span class="status muted">${label[r.status] || esc(r.status)}</span></div>`).join("")}</div></div>` : ""}`;
+  $$("[data-req]").forEach(b => b.onclick = async () => {
+    $$("[data-req]").forEach(x => x.disabled = true);
+    try { const r = await api("POST", "/api/requests/" + b.dataset.id, { action: b.dataset.req }); toast({ approved: "Video approved", allowed: "Channel allowed", blocked: "Channel blocked", dismissed: "Dismissed" }[r.status] || "Done"); }
+    catch (e) { toast(e.message); }
+    await refreshMe(); render();
+  });
+}
+
+/* ---------- channels ---------- */
+const SUGGEST = ["@khanacademy", "@scishowkids", "@crashcoursekids", "@natgeokids", "@numberblocks", "@pbskids"];
+async function tabChannels(list) {
+  const allow = list === "whitelist", rules = ME.rules, items = rules[list];
+  const body = $("#tabBody");
+  body.innerHTML = `<div class="panel">
+    <div><h2>${allow ? "Allowed channels" : "Blocked channels"}</h2><p class="muted small" style="margin-top:4px">${allow ? "Every video from these channels can play, unless a blocked word or a setting stops it." : "Nothing from these channels ever plays, even from a shared link."}</p></div>
+    ${allow ? `<div id="preview" class="msg small">Checking what your child sees…</div>` : ""}
+    <form id="chForm" class="row"><input id="chIn" type="text" placeholder="@handle, channel link, or any video link from it" aria-label="Channel"><button class="btn ${allow ? "primary" : "danger"}">${allow ? "Allow channel" : "Block channel"}</button></form>
+    <div id="chMsg"></div>
+    ${allow ? `<div><p class="small muted" style="margin-bottom:6px">Ideas to start with:</p><div class="tags">${SUGGEST.filter(h => !rules.whitelist.some(c => c.handle === h)).map(h => `<button class="btn sm" data-sugg="${h}">+ ${h}</button>`).join("")}</div></div>` : ""}
+    <div class="list">${items.length ? items.map(c => `<div class="item"><div class="av">${c.thumb ? `<img src="${esc(c.thumb)}" alt="">` : initial(c.title)}</div>
+      <div class="meta"><b>${esc(c.title)}</b><span class="muted small">${esc(c.handle || c.id)}</span></div>
+      <button class="btn sm" data-del="${esc(c.id || c.handle)}">Remove</button></div>`).join("") : `<p class="muted">None yet.</p>`}</div>
+  </div>`;
+  const add = async input => {
+    const m = $("#chMsg"); m.innerHTML = `<p class="muted small">Looking it up…</p>`;
+    try { const r = await api("POST", "/api/rules/channels", { input, list }); toast(`${allow ? "Allowed" : "Blocked"}: ${r.channel.title}`); await refreshMe(); render(); }
+    catch (e) { m.innerHTML = `<div class="msg bad">${esc(e.message)}</div>`; }
+  };
+  $("#chForm").onsubmit = e => { e.preventDefault(); add($("#chIn").value); };
+  $$("[data-sugg]").forEach(b => b.onclick = () => add(b.dataset.sugg));
+  $$("[data-del]").forEach(b => b.onclick = async () => { await api("DELETE", "/api/rules/channels", { list, key: b.dataset.del }); await refreshMe(); render(); });
+  if (allow && items.length) {
+    try { const p = await api("GET", "/api/preview"); const el = $("#preview"); if (el) el.innerHTML = `Your child can choose from <b>${p.count}</b> videos right now.${p.failed.length ? ` <span style="color:var(--danger)">Some channels didn't load: ${esc(p.failed[0])}</span>` : ""}`; }
+    catch (e) { const el = $("#preview"); if (el) el.hidden = true; }
+  } else $("#preview")?.remove();
+}
+
+/* ---------- videos ---------- */
+async function tabVideos(body) {
+  const vids = ME.rules.videos;
+  body.innerHTML = `<div class="panel"><div><h2>Single videos</h2><p class="muted small" style="margin-top:4px">Approve one video without opening up its whole channel. Approved videos skip the blocked-word and Shorts rules. A blocked channel still wins.</p></div>
+    <form id="vForm" class="row"><input id="vIn" type="text" placeholder="Video link" aria-label="Video link"><button class="btn primary">Approve video</button></form><div id="vMsg"></div>
+    <div class="list">${vids.length ? vids.map(v => `<div class="item"><div class="vt"><img src="${thumbOf(v.id)}" alt=""></div><div class="meta"><b>${esc(v.title)}</b><span class="muted small">${esc(v.channelTitle)}</span></div><button class="btn sm" data-delv="${esc(v.id)}">Remove</button></div>`).join("") : `<p class="muted">None yet.</p>`}</div></div>`;
+  $("#vForm").onsubmit = async e => {
+    e.preventDefault(); const m = $("#vMsg"); m.innerHTML = `<p class="muted small">Looking it up…</p>`;
+    try { const r = await api("POST", "/api/rules/videos", { input: $("#vIn").value }); toast("Approved: " + r.video.title); await refreshMe(); render(); }
+    catch (err) { m.innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; }
+  };
+  $$("[data-delv]").forEach(b => b.onclick = async () => { await api("DELETE", "/api/rules/videos/" + encodeURIComponent(b.dataset.delv)); await refreshMe(); render(); });
+}
+
+/* ---------- words ---------- */
+async function tabWords(body) {
+  const kw = ME.rules.keywords;
+  body.innerHTML = `<div class="panel"><div><h2>Blocked words</h2><p class="muted small" style="margin-top:4px">Videos with these words in the title, description or tags won't play, even from allowed channels. Separate several words with commas.</p></div>
+    <form id="kwForm" class="row"><input id="kwIn" type="text" placeholder="e.g. prank, scary, challenge" aria-label="Words to block"><button class="btn danger">Block words</button></form>
+    <div class="tags">${kw.length ? kw.map(k => `<span class="tagx">${esc(k)}<button data-delk="${esc(k)}" aria-label="Unblock ${esc(k)}">×</button></span>`).join("") : `<p class="muted">None yet.</p>`}</div></div>`;
+  $("#kwForm").onsubmit = async e => { e.preventDefault(); await api("POST", "/api/rules/keywords", { words: $("#kwIn").value }); await refreshMe(); render(); };
+  $$("[data-delk]").forEach(b => b.onclick = async () => { await api("DELETE", "/api/rules/keywords", { word: b.dataset.delk }); await refreshMe(); render(); });
+}
+
+/* ---------- devices ---------- */
+const fmtMin = s => `${Math.floor(s / 60)} min`;
+async function tabDevices(body) {
+  const devs = (await api("GET", "/api/devices")).devices;
+  const code = cache.code && cache.code.until > Date.now() ? cache.code : null;
+  body.innerHTML = `<div class="panel">
+    <div><h2>Devices</h2><p class="muted small" style="margin-top:4px">Each child's phone or tablet runs the Little Screen app. Rules you change here reach every device within a minute.</p></div>
+    <div class="list">${devs.length ? devs.map(d => {
+      const pct = d.limit ? Math.min(100, (d.sec / ((d.limit + d.extra) * 60)) * 100) : 0;
+      const seen = d.lastSeen ? new Date(d.lastSeen) : null, online = seen && Date.now() - seen < 3 * 60e3;
+      return `<div class="item" style="flex-wrap:wrap;align-items:flex-start">
+        <div class="meta" style="flex-basis:220px"><b>${esc(d.name)}</b><span class="muted small">${online ? `<span class="pill ok">Online</span>` : seen ? "Last seen " + seen.toLocaleString() : "Not seen yet"}</span></div>
+        <div style="flex:1 1 220px;display:grid;gap:6px;min-width:0">
+          <div class="stat"><b>${fmtMin(d.sec)}</b><span class="muted small">watched today${d.limit ? ` of ${d.limit + d.extra} min` : " · no daily limit"}</span></div>
+          ${d.limit ? `<div class="meter"><i class="${pct >= 100 ? "over" : ""}" style="width:${pct}%"></i></div>` : ""}
+        </div>
+        <div class="req-actions">${d.limit ? `<button class="btn sm" data-extra="15" data-id="${d.id}">+15 min today</button><button class="btn sm" data-extra="30" data-id="${d.id}">+30 min</button>` : ""}
+          <button class="btn sm ghost" data-rename="${d.id}" data-name="${esc(d.name)}">Rename</button><button class="btn sm ghost" data-remove="${d.id}" style="color:var(--danger)">Remove</button></div>
+      </div>`; }).join("") : `<div class="empty"><h3>No devices yet</h3><p class="muted small">Add your child's phone or tablet below.</p></div>`}</div>
+  </div>
+  <div class="panel"><h2>Add a device</h2>
+    <p class="muted small">Install Little Screen on your child's device (or open <code>${esc(location.origin)}/app/</code> in its browser), then type this code.</p>
+    ${code ? `<div class="code" aria-label="Pairing code">${code.code.replace(/(\d{3})(\d{3})/, "$1 $2")}</div><p class="muted small" style="text-align:center">Works once, for 15 minutes.</p>` : `<div><button class="btn primary" id="mkCode">Get a pairing code</button></div>`}
+  </div>`;
+  $("#mkCode")?.addEventListener("click", async () => { const r = await api("POST", "/api/devices/pair-code"); cache.code = { code: r.code, until: Date.now() + r.expiresInMin * 60e3 }; render(); });
+  $$("[data-extra]").forEach(b => b.onclick = async () => { await api("PATCH", "/api/devices/" + b.dataset.id, { extraMin: +b.dataset.extra }); toast(`Added ${b.dataset.extra} minutes for today`); render(); });
+  $$("[data-rename]").forEach(b => b.onclick = () => {
+    const item = b.closest(".item");
+    item.insertAdjacentHTML("beforeend", `<form class="row" style="width:100%"><input type="text" value="${b.dataset.name}" aria-label="Device name" maxlength="40"><button class="btn sm primary">Save name</button></form>`);
+    const f = item.querySelector("form"); f.querySelector("input").focus(); b.disabled = true;
+    f.onsubmit = async e => { e.preventDefault(); await api("PATCH", "/api/devices/" + b.dataset.rename, { name: f.querySelector("input").value }); render(); };
+  });
+  $$("[data-remove]").forEach(b => {
+    let armed = 0;
+    b.onclick = async () => {
+      if (Date.now() - armed > 4000) { armed = Date.now(); b.textContent = "Tap again to remove"; return; }
+      await api("DELETE", "/api/devices/" + b.dataset.remove); toast("Device removed. It will need a new code to pair again."); render();
+    };
+  });
+  clearInterval(window._devPoll); window._devPoll = setInterval(() => { if (TAB === "devices" && document.visibilityState === "visible" && !$("#tabBody form")) tabDevices($("#tabBody")).catch(() => {}); }, 30000);
+}
+
+/* ---------- settings ---------- */
+async function tabSettings(body) {
+  const r = ME.rules, t = ME.telegram;
+  const zones = (Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : [ME.tz]);
+  body.innerHTML = `
+  <div class="panel"><h2>Watch rules</h2>
+    <label class="switch"><span><b>Block Shorts</b><br><span class="muted small">Hides videos tagged #shorts and anything one minute or shorter.</span></span><input type="checkbox" id="sShorts" ${r.blockShorts ? "checked" : ""}></label>
+    <label class="switch"><span><b>Only “made for kids” videos</b><br><span class="muted small">Even on allowed channels, show only videos the channel marked as made for kids.</span></span><input type="checkbox" id="sKids" ${r.kidsOnly ? "checked" : ""}></label>
+    <div class="field"><label for="sLimit">Daily watch time per device (minutes, 0 for no limit)</label><div class="row"><input id="sLimit" type="number" min="0" max="600" step="5" value="${r.dailyLimit}" style="max-width:160px;flex:0 0 160px"><button class="btn sm" id="sLimitSave">Save limit</button></div></div>
+    <div class="field"><label for="sTz">Time zone (when the daily limit resets)</label><select id="sTz">${zones.map(z => `<option ${z === ME.tz ? "selected" : ""}>${esc(z)}</option>`).join("")}</select></div>
+  </div>
+  <div class="panel"><h2>Device PIN</h2>
+    <p class="muted small">Grown-ups use this PIN on the child's device to add time or unpair it. It's checked on the server and never stored on the device.</p>
+    <p>${ME.pinSet ? `<span class="pill ok">PIN is set</span>` : `<span class="pill warn">No PIN yet</span>`}</p>
+    <form id="pinForm" class="row"><input id="pinIn" type="password" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="4 to 6 numbers" aria-label="New PIN"><button class="btn primary">${ME.pinSet ? "Change PIN" : "Set PIN"}</button></form>
+  </div>
+  <div class="panel"><h2>Telegram alerts</h2>
+    ${!t.enabled ? `<p class="muted small">Not available on this server. Set <code>TELEGRAM_BOT_TOKEN</code> and <code>PUBLIC_URL</code> in Railway to turn it on.</p>`
+      : t.linked ? `<p><span class="pill ok">Linked</span></p><p class="muted small">Requests arrive in Telegram with buttons to approve, allow, block or dismiss.</p><div><button class="btn sm danger" id="tgUnlink">Unlink Telegram</button></div>`
+      : `<p class="muted small">Get each request in Telegram and answer it with one tap.</p><div><button class="btn primary" id="tgLink">Link Telegram</button></div><div id="tgOut"></div>`}
+  </div>
+  <div class="panel"><h2>Account</h2>
+    <p class="muted small">Signed in as <b>${esc(ME.email)}</b></p>
+    <form id="pwForm" class="field" style="gap:10px">
+      <div class="field"><label for="pwCur">Current password</label><input id="pwCur" type="password" autocomplete="current-password"></div>
+      <div class="field"><label for="pwNew">New password</label><input id="pwNew" type="password" autocomplete="new-password" minlength="8"></div>
+      <div><button class="btn">Change password</button></div>
+    </form>
+  </div>
+  <div class="panel"><h2>Delete account</h2>
+    <p class="muted small">Permanently deletes your account, rules, devices and request history. Paired devices stop working.</p>
+    <form id="delForm" class="row"><input id="delPw" type="password" autocomplete="current-password" placeholder="Your password" aria-label="Password to confirm"><button class="btn danger" id="delBtn">Delete my account</button></form>
+    <div id="delMsg"></div>
+  </div>`;
+  const setRules = async (patch, msg) => { try { await api("PUT", "/api/rules/settings", patch); await refreshMe(); toast(msg); } catch (e) { toast(e.message); } };
+  $("#sShorts").onchange = e => setRules({ blockShorts: e.target.checked }, e.target.checked ? "Shorts blocked" : "Shorts allowed");
+  $("#sKids").onchange = e => setRules({ kidsOnly: e.target.checked }, e.target.checked ? "Only made-for-kids videos" : "All videos from allowed channels");
+  $("#sLimitSave").onclick = () => { const v = parseInt($("#sLimit").value, 10) || 0; setRules({ dailyLimit: v }, v ? `Daily limit: ${v} min` : "No daily limit"); };
+  $("#sTz").onchange = e => setRules({ tz: e.target.value }, "Time zone saved");
+  $("#pinForm").onsubmit = async e => { e.preventDefault(); try { await api("PUT", "/api/pin", { pin: $("#pinIn").value }); await refreshMe(); toast("PIN saved"); render(); } catch (err) { toast(err.message); } };
+  $("#tgLink")?.addEventListener("click", async () => {
+    try { const r = await api("POST", "/api/telegram/link"); $("#tgOut").innerHTML = `<div class="msg small">Open this link on the phone with Telegram and tap <b>Start</b>:<br><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a><br>Then come back and refresh this page.</div>`; }
+    catch (err) { toast(err.message); }
+  });
+  $("#tgUnlink")?.addEventListener("click", async () => { await api("DELETE", "/api/telegram"); await refreshMe(); render(); toast("Telegram unlinked"); });
+  $("#pwForm").onsubmit = async e => { e.preventDefault(); try { await api("PUT", "/api/account/password", { current: $("#pwCur").value, next: $("#pwNew").value }); toast("Password changed"); e.target.reset(); } catch (err) { toast(err.message); } };
+  let armed = 0;
+  $("#delForm").onsubmit = async e => {
+    e.preventDefault();
+    if (Date.now() - armed > 5000) { armed = Date.now(); $("#delBtn").textContent = "Tap again to delete forever"; return; }
+    try { await api("DELETE", "/api/account", { password: $("#delPw").value }); ME = null; authMode = "signup"; render(); toast("Your account was deleted."); }
+    catch (err) { $("#delMsg").innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; $("#delBtn").textContent = "Delete my account"; armed = 0; }
+  };
+}
+
+// keep the request badge fresh
+setInterval(async () => { if (ME && document.visibilityState === "visible") { const before = ME.pending; try { await refreshMe(); } catch { return; } if (ME.pending !== before) { const b = $(".tab[data-tab=requests]"); if (b) b.innerHTML = "Requests" + (ME.pending ? `<span class="badge">${ME.pending}</span>` : ""); if (TAB === "requests" && !$("#tabBody form")) loadTab(); } } }, 30000);
+boot();
+</script>
+</body>
+</html>

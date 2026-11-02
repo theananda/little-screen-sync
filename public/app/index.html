@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Little Screen</title>
+<meta name="theme-color" content="#1f8a5b">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<link rel="stylesheet" href="base.css">
+<style>
+.search{flex:1;min-width:0;display:flex}
+.search input{width:100%;padding:10px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);min-height:44px}
+.shelf{display:flex;gap:14px;overflow-x:auto;padding:4px 2px 10px;scrollbar-width:thin;max-width:100%;overscroll-behavior-x:contain}
+.chip{flex:0 0 auto;width:96px;display:grid;justify-items:center;gap:6px;background:none;border:0;cursor:pointer;padding:4px;text-align:center}
+.chip .av{width:72px;height:72px;border-radius:50%;background:var(--sunk);display:grid;place-items:center;font-family:var(--display);font-size:1.6rem;overflow:hidden;border:3px solid transparent}
+.chip .av img{width:100%;height:100%;object-fit:cover}
+.chip.on .av,.chip:hover .av{border-color:var(--accent)}
+.chip span{font-size:.85rem;line-height:1.2;max-width:96px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.watch{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;align-items:start}
+@media (max-width:900px){.watch{grid-template-columns:minmax(0,1fr)}}
+.stage{position:relative;aspect-ratio:16/9;max-width:100%;background:#000;border-radius:var(--r);overflow:hidden}
+.stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.up-list{display:grid;gap:12px}
+.up{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px;background:none;border:0;padding:0;text-align:left;cursor:pointer}
+.up .t{font-weight:700;font-size:.92rem;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.notice{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-radius:12px;background:var(--sunk)}
+.notice .grow{flex:1 1 200px;min-width:0}
+.sites{margin:6px 0 0;padding:0;list-style:none;font-family:ui-monospace,Menlo,monospace;font-size:.82rem}
+.pairCode{font-family:var(--display);font-size:2rem;letter-spacing:.3em;text-align:center;font-variant-numeric:tabular-nums}
+@media (max-width:560px){.search{order:3;flex-basis:100%}.bar .wrap{flex-wrap:wrap}.up{grid-template-columns:130px minmax(0,1fr)}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" role="status" hidden></div>
+<script src="config.js"></script>
+<script>
+"use strict";
+/* Little Screen child app.
+   App Store / YouTube policy notes:
+   - The YouTube player is shown as-is inside our own embed page: nothing is drawn over it,
+     no links in it are hidden or disabled, and native full screen is left on.
+   - No ads, no analytics, no third-party tracking. Videos play from youtube-nocookie.com.
+   - Grown-up actions sit behind a PIN (parental gate) that the server checks. */
+const API = (window.LS_API || location.origin).replace(/\/$/, "");
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const thumbOf = id => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+const initial = s => esc((String(s || "?").replace(/^@/, "")[0] || "?").toUpperCase());
+function fmtDur(sec) { if (!sec) return ""; const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); }
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem("ls." + k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem("ls." + k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem("ls." + k); } catch {} }
+};
+let toastT;
+function toast(m) { const t = $("#toast"); t.textContent = m; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2800); }
+
+const ICON = {
+  logo: `<svg viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="5" width="28" height="20" rx="6" fill="var(--accent)"/><path d="M13 10.5v9l7.5-4.5z" fill="var(--accent-ink)"/><rect x="10" y="27" width="12" height="2.5" rx="1.25" fill="var(--sun)"/></svg>`,
+  lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`,
+  tv: `<svg viewBox="0 0 88 88" aria-hidden="true"><rect x="10" y="20" width="68" height="46" rx="12" fill="var(--sunk)" stroke="var(--line)" stroke-width="3"/><circle cx="34" cy="42" r="4" fill="var(--muted)"/><circle cx="54" cy="42" r="4" fill="var(--muted)"/><path d="M36 54q8 5 16 0" stroke="var(--muted)" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M34 12l10 8 10-8" stroke="var(--accent)" stroke-width="3" fill="none" stroke-linecap="round"/></svg>`
+};
+const SITES = ["youtube-nocookie.com", "youtube.com", "googlevideo.com", "ytimg.com", "googleapis.com", new URL(API).host];
+
+/* ---------- server ---------- */
+let TOKEN = store.get("token");
+async function api(method, path, body) {
+  let r;
+  try {
+    r = await fetch(API + path, { method, headers: { "content-type": "application/json", ...(TOKEN ? { authorization: "Bearer " + TOKEN } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  } catch { throw Object.assign(new Error("Can't reach Little Screen. Check the internet connection."), { offline: true }); }
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && TOKEN) { TOKEN = null; store.del("token"); store.del("feed"); go({ name: "pair" }); throw new Error(j.error || "This device needs pairing again."); }
+  if (!r.ok) throw Object.assign(new Error(j.error || "Something went wrong."), { status: r.status });
+  return j;
+}
+
+/* ---------- state ---------- */
+let FEED = store.get("feed");          // {v, channels, videos, remaining, limit, hasPin, deviceName}
+let offline = false;
+let V = { name: TOKEN ? "home" : "pair" };
+function go(view) { V = view; render(); window.scrollTo(0, 0); }
+
+async function loadFeed() {
+  try { FEED = await api("GET", "/api/device/feed"); store.set("feed", FEED); offline = false; }
+  catch (e) { if (e.offline) offline = true; else throw e; }
+  if (["home", "channel"].includes(V.name)) { const q = $("#q"), f = document.activeElement === q; render(); if (f) $("#q")?.focus(); }
+}
+
+/* heartbeat: watched seconds up, rules version + remaining time down */
+let pState = -1, watched = 0, lastFeedAt = Date.now();
+setInterval(() => { if (V.name === "watch" && pState === 1 && document.visibilityState === "visible") watched++; }, 1000);
+async function ping() {
+  if (!TOKEN) return;
+  const send = Math.min(watched, 90); watched -= send;
+  try {
+    const r = await api("POST", "/api/device/ping", { watched: send });
+    offline = false;
+    if (FEED) { FEED.remaining = r.remaining; FEED.limit = r.limit; }
+    if (!FEED || r.v !== FEED.v || Date.now() - lastFeedAt > 30 * 60e3) { lastFeedAt = Date.now(); loadFeed(); }
+    if (r.remaining === 0 && V.name !== "timeup" && V.name !== "grownup") { pausePlayer(); go({ name: "timeup" }); }
+    updateTimePill();
+  } catch (e) { watched += send; if (e.offline) offline = true; }
+}
+setInterval(ping, 30000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ping(); });
+
+/* ---------- top bar ---------- */
+function timePill() {
+  const r = FEED?.remaining; if (r == null) return "";
+  return `<span class="pill ${r < 300 ? "warn" : ""}" id="timePill" title="Watch time left today">${Math.ceil(r / 60)} min left</span>`;
+}
+function updateTimePill() { const p = $("#timePill"); if (p && FEED?.remaining != null) { p.textContent = Math.ceil(FEED.remaining / 60) + " min left"; p.classList.toggle("warn", FEED.remaining < 300); } }
+function barHTML(search = true) {
+  return `<header class="bar"><div class="wrap">
+    <button class="brand" data-go="home" aria-label="Little Screen home">${ICON.logo}<span>Little Screen</span></button>
+    ${search ? `<div class="search"><input id="q" type="search" placeholder="Search your videos" aria-label="Search your videos" value="${esc(V.q || "")}"></div>` : `<div class="spacer"></div>`}
+    ${timePill()}
+    <button class="btn icon-btn ghost" data-go="grownup" aria-label="Grown-ups" title="Grown-ups">${ICON.lock}</button>
+  </div></header>`;
+}
+
+/* ---------- render ---------- */
+function render() {
+  const app = $("#app");
+  if (!TOKEN && V.name !== "pair") V = { name: "pair" };
+  if (FEED?.remaining === 0 && ["home", "channel", "watch"].includes(V.name)) V = { name: "timeup" };
+  const views = { pair: pairHTML, home: homeHTML, channel: homeHTML, watch: watchHTML, timeup: timeupHTML, grownup: gateHTML, panel: panelHTML };
+  app.innerHTML = (views[V.name] || homeHTML)();
+  (after[V.name] || (() => {}))();
+}
+const after = {};
+
+/* ---------- pair ---------- */
+function pairHTML() {
+  return `<div class="wrap gate"><div class="panel">
+    <div style="width:64px">${ICON.logo}</div>
+    <h1>Set up Little Screen</h1>
+    <p class="muted">A grown-up opens the Little Screen parent dashboard, goes to <b>Devices</b>, and taps <b>Get a pairing code</b>.</p>
+    <form id="pairForm" class="field" style="gap:12px;width:100%;text-align:left">
+      <div class="field"><label for="pcode">Pairing code</label><input id="pcode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123 456" class="pairCode" required></div>
+      <div class="field"><label for="pname">Name this device</label><input id="pname" type="text" maxlength="40" placeholder="e.g. Mia's iPad"></div>
+      <div id="pairMsg"></div>
+      <button class="btn primary">Pair this device</button>
+    </form>
+    <p class="small muted">Server: <code>${esc(new URL(API).host)}</code></p>
+  </div></div>`;
+}
+after.pair = () => {
+  $("#pairForm").onsubmit = async e => {
+    e.preventDefault(); const btn = e.target.querySelector("button"); btn.disabled = true;
+    try {
+      const r = await api("POST", "/api/device/pair", { code: $("#pcode").value, name: $("#pname").value });
+      TOKEN = r.token; store.set("token", TOKEN); FEED = null;
+      go({ name: "home" }); toast("Paired! Loading your videos…");
+    } catch (err) { $("#pairMsg").innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; btn.disabled = false; }
+  };
+};
+
+/* ---------- home / channel ---------- */
+function cardHTML(v) {
+  return `<button class="card" data-watch="${esc(v.id)}"><div class="thumb"><img loading="lazy" src="${thumbOf(v.id)}" alt="">${v.dur ? `<span class="dur">${fmtDur(v.dur)}</span>` : ""}</div>
+    <div><div class="t">${esc(v.title)}</div><div class="c">${esc(v.channelTitle || "")}</div></div></button>`;
+}
+function homeHTML() {
+  const chans = FEED?.channels || [];
+  const sel = V.name === "channel" ? V.ch : null;
+  let vids = FEED?.videos || [];
+  if (sel) vids = vids.filter(v => v.channelId === sel);
+  const q = (V.q || "").trim().toLowerCase();
+  if (q) vids = vids.filter(v => (v.title + " " + v.channelTitle).toLowerCase().includes(q));
+  const selCh = sel && chans.find(c => c.id === sel);
+  let grid;
+  if (!FEED) grid = offline ? `<div class="panel empty">${ICON.tv}<h2>Can't connect</h2><p class="muted">Check the internet connection, then try again.</p><button class="btn primary" id="retry">Try again</button></div>` : `<div class="grid">${"<div class='skel'></div>".repeat(8)}</div>`;
+  else if (!chans.length && !FEED.videos.length) grid = `<div class="panel empty">${ICON.tv}<h2>No videos yet</h2><p class="muted">Ask a grown-up to add some channels you like.</p></div>`;
+  else if (!vids.length) grid = `<div class="panel empty"><h2>${q ? "Nothing matches “" + esc(V.q) + "”" : "No videos here yet"}</h2><p class="muted">${q ? "Try another word." : "New videos will show up here."}</p></div>`;
+  else grid = `<div class="grid">${vids.slice(0, 150).map(cardHTML).join("")}</div>`;
+  return barHTML() + `<main class="wrap">
+    ${offline && FEED ? `<div class="msg small">Can't reach Little Screen right now. Showing your saved list.</div>` : ""}
+    ${chans.length ? `<section aria-label="Your channels"><div class="shelf">
+      <button class="chip ${!sel ? "on" : ""}" data-go="home"><div class="av" style="background:var(--accent);color:var(--accent-ink)">★</div><span>Everything</span></button>
+      ${chans.map(c => `<button class="chip ${sel === c.id ? "on" : ""}" data-ch="${esc(c.id)}"><div class="av">${c.thumb ? `<img src="${esc(c.thumb)}" alt="">` : initial(c.title)}</div><span>${esc(c.title)}</span></button>`).join("")}
+    </div></section>` : ""}
+    <section style="display:grid;gap:14px"><h1>${selCh ? esc(selCh.title) : q ? "Search results" : "Your videos"}</h1>${grid}</section>
+    <section class="panel" aria-labelledby="askh">
+      <h2 id="askh">Got a video link?</h2>
+      <p class="muted small">Paste it here. If it's on your list it plays. If not, you can ask a grown-up.</p>
+      <form id="askForm" class="row"><input id="askIn" type="text" placeholder="https://youtu.be/…" aria-label="Video link"><button class="btn primary">Check</button></form>
+      <div id="askOut"></div>
+    </section>
+  </main>`;
+}
+after.home = after.channel = () => {
+  const q = $("#q");
+  q?.addEventListener("input", () => { V.q = q.value; const pos = q.selectionStart; render(); const n = $("#q"); n.focus(); n.setSelectionRange(pos, pos); });
+  $("#retry")?.addEventListener("click", () => { offline = false; render(); loadFeed().catch(e => toast(e.message)); });
+  $("#askForm").onsubmit = async e => {
+    e.preventDefault(); const out = $("#askOut"); out.innerHTML = `<p class="muted small">Checking…</p>`;
+    try {
+      const r = await api("POST", "/api/device/check", { input: $("#askIn").value });
+      if (r.ok) { go({ name: "watch", id: r.video.id, v: r.video }); return; }
+      out.innerHTML = `<div class="item" style="flex-wrap:wrap"><div class="vt"><img src="${thumbOf(r.video.id)}" alt=""></div><div class="meta"><b>${esc(r.video.title)}</b><span class="muted small">${esc(r.video.channelTitle)} · ${esc(r.why)}</span></div>
+        ${r.canAsk ? `<button class="btn sm primary" id="reqBtn" ${r.asked ? "disabled" : ""}>${r.asked ? "Asked" : "Ask a grown-up"}</button>` : ""}</div>`;
+      $("#reqBtn")?.addEventListener("click", async ev => {
+        const b = ev.currentTarget; b.disabled = true;
+        try { await api("POST", "/api/device/request", { videoId: r.video.id }); b.textContent = "Asked"; toast("Sent to your grown-up"); }
+        catch (err) { b.disabled = false; toast(err.message); }
+      });
+    } catch (err) { out.innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; }
+  };
+  if (!FEED && !offline) loadFeed().catch(e => toast(e.message));
+};
+
+/* ---------- watch ---------- */
+let frame = null, readyTimer = 0, nextTimer = 0;
+function pausePlayer() { try { frame?.contentWindow?.postMessage({ src: "ls-app", cmd: "pause" }, API); } catch {} }
+function watchHTML() {
+  const all = FEED?.videos || [];
+  const v = V.v || all.find(x => x.id === V.id);
+  if (!v) return barHTML(false) + `<main class="wrap"><div class="panel empty">${ICON.tv}<h2>Can't play this one</h2><p class="muted">It isn't on your list.</p><button class="btn primary" data-go="home">Back to my videos</button></div></main>`;
+  const rest = all.filter(x => x.id !== v.id);
+  const same = rest.filter(x => x.channelId === v.channelId);
+  const next = [...same, ...rest.filter(x => x.channelId !== v.channelId)].slice(0, 12);
+  V.next = next.map(x => x.id);
+  return barHTML(false) + `<main class="wrap"><div class="watch">
+    <div style="display:grid;gap:12px;min-width:0">
+      <div class="stage"><iframe id="player" title="${esc(v.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"
+        src="${API}/embed.html?v=${encodeURIComponent(v.id)}&parent=${encodeURIComponent(location.origin)}"></iframe></div>
+      <div id="notice"></div>
+      <div><h1 style="font-size:1.35rem">${esc(v.title)}</h1><p class="muted" style="margin-top:4px">${esc(v.channelTitle || "")}</p></div>
+    </div>
+    <aside style="display:grid;gap:12px;min-width:0"><h2>Up next</h2>
+      ${next.length ? `<div class="up-list">${next.map(x => `<button class="up" data-watch="${esc(x.id)}"><div class="thumb"><img loading="lazy" src="${thumbOf(x.id)}" alt="">${x.dur ? `<span class="dur">${fmtDur(x.dur)}</span>` : ""}</div><div style="min-width:0"><div class="t">${esc(x.title)}</div><div class="muted small">${esc(x.channelTitle || "")}</div></div></button>`).join("")}</div>` : `<p class="muted">That's everything on your list for now.</p>`}
+    </aside></div></main>`;
+}
+function notice(html) { const n = $("#notice"); if (n) n.innerHTML = html ? `<div class="notice">${html}</div>` : ""; }
+after.watch = () => {
+  frame = $("#player"); pState = -1;
+  clearTimeout(readyTimer); clearInterval(nextTimer);
+  if (!frame) return;
+  readyTimer = setTimeout(() => notice(`<div class="grow"><b>The video player didn't load.</b><p class="small muted">Something on this device or network may be blocking it. A grown-up can allow these sites:</p><ul class="sites">${SITES.map(s => `<li>${esc(s)}</li>`).join("")}</ul></div>`), 12000);
+};
+window.addEventListener("message", e => {
+  if (e.origin !== new URL(API).origin || e.data?.src !== "ls-embed" || V.name !== "watch") return;
+  const { type, data } = e.data;
+  if (type === "ready") { clearTimeout(readyTimer); notice(""); }
+  if (type === "blocked") { clearTimeout(readyTimer); after.watch && notice(`<div class="grow"><b>The video player is blocked on this device.</b><ul class="sites">${SITES.map(s => `<li>${esc(s)}</li>`).join("")}</ul></div>`); }
+  if (type === "state") {
+    pState = data;
+    if (data === 1) { clearInterval(nextTimer); notice(""); }
+    if (data === 0) startNextCountdown();
+  }
+  if (type === "error") {
+    const nextId = V.next?.[0];
+    const msg = data === 101 || data === 150 ? "This one only plays on YouTube itself." : "This video can't be played right now.";
+    notice(`<div class="grow"><b>${msg}</b></div>${nextId ? `<button class="btn sm primary" data-watch="${esc(nextId)}">Watch the next one</button>` : ""}`);
+  }
+});
+function startNextCountdown() {
+  const nextId = V.next?.[0]; if (!nextId) return notice(`<div class="grow"><b>All done!</b> That's everything on your list.</div><button class="btn sm" data-go="home">Back to my videos</button>`);
+  let n = 8;
+  const draw = () => notice(`<div class="grow"><b>Up next in ${n}…</b></div><button class="btn sm primary" data-watch="${esc(nextId)}">Play now</button><button class="btn sm ghost" id="stopNext">Stop</button>`);
+  draw(); clearInterval(nextTimer);
+  nextTimer = setInterval(() => { n--; if (n <= 0) { clearInterval(nextTimer); go({ name: "watch", id: nextId }); } else draw(); }, 1000);
+}
+document.addEventListener("click", e => { if (e.target.closest("#stopNext")) { clearInterval(nextTimer); notice(""); } });
+
+/* ---------- time up ---------- */
+function timeupHTML() {
+  return barHTML(false) + `<main class="wrap"><div class="gate"><div class="panel">${ICON.tv}<h1>That's all for today</h1>
+    <p class="muted">You've used today's watch time. A grown-up can add more.</p>
+    <button class="btn primary" data-go="grownup">Grown-up: add time</button></div></div></main>`;
+}
+
+/* ---------- grown-up gate (PIN checked by the server) ---------- */
+let pinBuf = "", gatePin = "", gateUntil = 0;
+function gateHTML() {
+  if (FEED && !FEED.hasPin) return barHTML(false) + `<main class="wrap"><div class="gate"><div class="panel"><div style="width:40px;color:var(--muted)">${ICON.lock}</div><h2>No PIN yet</h2><p class="muted small">Set a device PIN in the parent dashboard under <b>Settings</b>. Rules and time can also be changed there.</p><button class="btn" data-go="home">Back</button></div></div></main>`;
+  return barHTML(false) + `<div class="wrap gate"><div class="panel" id="gatePanel">
+    <div style="width:40px;color:var(--muted)">${ICON.lock}</div><h2>Grown-ups only</h2><p class="muted small">Enter the family PIN.</p>
+    <div class="dots" id="dots" aria-hidden="true"></div>
+    <input id="pinIn" type="password" inputmode="numeric" autocomplete="off" maxlength="6" aria-label="PIN" style="position:absolute;opacity:0;width:1px;height:1px">
+    <div class="pad" role="group" aria-label="Number pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button data-d="${n}">${n}</button>`).join("")}
+      <button data-d="back" aria-label="Delete">⌫</button><button data-d="0">0</button><button data-d="ok" aria-label="Done" style="background:var(--accent);color:var(--accent-ink);border-color:var(--accent)">✓</button></div>
+    <p id="pinMsg" class="small" style="min-height:1.5em;color:var(--danger)"></p>
+    <button class="btn ghost sm" data-go="home">Cancel</button></div></div>`;
+}
+after.grownup = () => {
+  if (!$("#gatePanel")) return;
+  pinBuf = "";
+  const dots = () => $("#dots").innerHTML = Array.from({ length: Math.max(4, pinBuf.length) }, (_, i) => `<i class="${i < pinBuf.length ? "f" : ""}"></i>`).join("");
+  const msg = m => { $("#pinMsg").textContent = m; const p = $("#gatePanel"); p.classList.remove("shake"); void p.offsetWidth; p.classList.add("shake"); };
+  const submit = async () => {
+    if (pinBuf.length < 4) return msg("Use at least 4 numbers.");
+    try { await api("POST", "/api/device/grownup", { pin: pinBuf }); gatePin = pinBuf; gateUntil = Date.now() + 3 * 60e3; go({ name: "panel" }); }
+    catch (e) { pinBuf = ""; dots(); msg(e.message); }
+  };
+  const press = d => { if (d === "back") pinBuf = pinBuf.slice(0, -1); else if (d === "ok") return submit(); else if (pinBuf.length < 6) pinBuf += d; dots(); };
+  $$(".pad button").forEach(b => b.onclick = () => press(b.dataset.d));
+  const inp = $("#pinIn"); inp.focus({ preventScroll: true });
+  inp.onkeydown = e => { if (/^\d$/.test(e.key)) { e.preventDefault(); press(e.key); } else if (e.key === "Backspace") { e.preventDefault(); press("back"); } else if (e.key === "Enter") { e.preventDefault(); press("ok"); } };
+  dots();
+};
+function panelHTML() {
+  if (Date.now() > gateUntil) { gatePin = ""; return gateHTML(); }
+  const r = FEED?.remaining;
+  return `<header class="bar"><div class="wrap"><div class="brand">${ICON.logo}<span>Little Screen</span></div><span class="pill">Grown-ups</span><div class="spacer"></div>
+    <button class="btn sm primary" data-go="home">${ICON.lock}<span>Lock</span></button></div></header>
+  <main class="wrap">
+    <div class="panel"><h2>Watch time today</h2>
+      <p class="muted">${r == null ? "There's no daily limit on this device." : `${Math.ceil(r / 60)} minutes left today.`}</p>
+      ${r == null ? "" : `<div class="row"><button class="btn" data-extra="15">+15 min</button><button class="btn" data-extra="30">+30 min</button><button class="btn" data-extra="60">+1 hour</button></div>`}
+    </div>
+    <div class="panel"><h2>Channels and rules</h2>
+      <p class="muted small">Change channels, answer requests and set limits from the parent dashboard on your own phone or computer:</p>
+      <p><code>${esc(API)}/parent/</code></p>
+    </div>
+    <div class="panel"><h2>This device</h2><p class="muted small">Paired as <b>${esc(FEED?.deviceName || "this device")}</b>.</p>
+      <div><button class="btn danger" id="unpair">Unpair this device</button></div></div>
+  </main>`;
+}
+after.panel = () => {
+  $$("[data-extra]").forEach(b => b.onclick = async () => {
+    try { const r = await api("POST", "/api/device/grownup", { pin: gatePin, action: "extra", minutes: +b.dataset.extra }); if (FEED) FEED.remaining = r.remaining; toast(`Added ${b.dataset.extra} minutes`); render(); }
+    catch (e) { toast(e.message); }
+  });
+  let armed = 0;
+  $("#unpair")?.addEventListener("click", async ev => {
+    if (Date.now() - armed > 4000) { armed = Date.now(); ev.currentTarget.textContent = "Tap again to unpair"; return; }
+    try { await api("POST", "/api/device/grownup", { pin: gatePin, action: "unpair" }); } catch {}
+    TOKEN = null; store.del("token"); store.del("feed"); FEED = null; go({ name: "pair" });
+  });
+};
+
+/* ---------- navigation ---------- */
+document.addEventListener("click", e => {
+  const g = e.target.closest("[data-go]"), w = e.target.closest("[data-watch]"), c = e.target.closest("[data-ch]");
+  if (g) { if (V.name === "panel") { gatePin = ""; gateUntil = 0; } return go({ name: g.dataset.go }); }
+  if (w) return go({ name: "watch", id: w.dataset.watch });
+  if (c) return go({ name: "channel", ch: c.dataset.ch });
+});
+document.addEventListener("visibilitychange", () => { if (document.hidden && V.name === "panel") { gatePin = ""; go({ name: "home" }); } });
+
+render();
+if (TOKEN) { ping(); loadFeed().catch(() => {}); }
+</script>
+</body>
+</html>

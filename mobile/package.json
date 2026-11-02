@@ -1,0 +1,22 @@
+{
+  "name": "little-screen-mobile",
+  "version": "2.0.0",
+  "private": true,
+  "description": "iOS and Android packaging for the Little Screen child app",
+  "scripts": {
+    "build:web": "node build-web.mjs",
+    "add:ios": "npx cap add ios",
+    "add:android": "npx cap add android",
+    "sync": "node build-web.mjs && npx cap sync",
+    "open:ios": "npx cap open ios",
+    "open:android": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}

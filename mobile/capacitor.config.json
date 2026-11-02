@@ -1,0 +1,15 @@
+{
+  "appId": "org.theananda.littlescreen",
+  "appName": "Little Screen",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "ios": {
+    "contentInset": "never",
+    "allowsLinkPreview": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
