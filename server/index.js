@@ -470,10 +470,17 @@ app.post("/api/telegram/webhook", async (req, res) => {
     } else if (u.callback_query) {
       const cq = u.callback_query, chat = String(cq.message?.chat?.id || "");
       const m = String(cq.data || "").match(/^r:(\d+):(video|channel|block|no)$/);
-      const f = m && await one("select id from families where tg_chat_id=$1", [chat]);
-      if (!f) return void tg.answer(cq.id, "This chat isn't linked any more.");
+      if (!m) return void tg.answer(cq.id, "That button isn't recognised.");
+      // Find the request first, then check its family is linked to this chat.
+      // (One Telegram chat may be linked to several parent accounts.)
+      const r = await one(`select r.family_id from requests r join families f on f.id = r.family_id
+                           where r.id=$1 and f.tg_chat_id=$2`, [parseInt(m[1], 10), chat]);
+      if (!r) {
+        const linked = await one("select 1 from families where tg_chat_id=$1", [chat]);
+        return void tg.answer(cq.id, linked ? "That request was removed or belongs to another account." : "This chat isn't linked any more.");
+      }
       try {
-        const out = await applyRequest(f.id, parseInt(m[1], 10), m[2]);
+        const out = await applyRequest(r.family_id, parseInt(m[1], 10), m[2]);
         const label = { approved: "✅ Video approved", allowed: "📺 Channel allowed", blocked: "⛔ Channel blocked", dismissed: "Dismissed" }[out.status] || out.status;
         await tg.answer(cq.id, out.already ? "Already handled" : label);
         await tg.edit(chat, cq.message.message_id, `${cq.message.text?.split("\n").slice(0, 3).map(tg.escHtml).join("\n") || ""}\n\n<b>${label}</b>`);
@@ -486,7 +493,9 @@ app.post("/api/telegram/webhook", async (req, res) => {
 const pub = path.join(__dirname, "..", "public");
 // Public site settings for the home page (APK link, source code link).
 app.get("/api/site", (req, res) => {
-  const repo = /^[\w.-]+\/[\w.-]+$/.test(process.env.GITHUB_REPO || "") ? process.env.GITHUB_REPO : "";
+  // Accepts "owner/repo" or a full GitHub address like https://github.com/owner/repo(.git)
+  const raw = String(process.env.GITHUB_REPO || "").trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//i, "").replace(/\.git$/i, "").replace(/\/+$/, "");
+  const repo = /^[\w.-]+\/[\w.-]+$/.test(raw) ? raw : "";
   const apk = process.env.APK_URL || (repo ? `https://github.com/${repo}/releases/latest/download/little-screen.apk` : "");
   res.set("Cache-Control", "public, max-age=300");
   res.json({ repo: repo ? `https://github.com/${repo}` : "", apk, releases: repo ? `https://github.com/${repo}/releases` : "" });
