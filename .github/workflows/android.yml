@@ -1,17 +1,23 @@
 # Builds the Little Screen Android app on GitHub's servers.
-# Run it from the repo's Actions tab → "Build Android app" → Run workflow.
-# Download the result from the finished run's "Artifacts" section.
 #
-# Always produces:  little-screen-debug-apk   (install directly on a phone for testing)
-# If signing secrets are set (see README), also: little-screen-release  (signed .apk + .aab for Google Play)
+#  • Push to main (child app or mobile files changed), or run it by hand from the Actions tab:
+#      → "little-screen-test-apk" artifact (a test build; download it from the run page)
+#  • Push a version tag such as v2.1.0 (runs via release.yml):
+#      → a signed little-screen.apk (+ .aab for Google Play) published on the Releases page.
+#        The website's "Download for Android" button always points at the newest release.
+#        Needs the four ANDROID_* signing secrets (see docs/MAINTAINERS.md).
 
 name: Build Android app
 
 on:
   workflow_dispatch:
+  workflow_call:        # used by release.yml when a v* tag is pushed
   push:
     branches: [main]
     paths: ["public/app/**", "public/base.css", "mobile/**", ".github/workflows/android.yml"]
+
+permissions:
+  contents: write   # needed to publish releases
 
 jobs:
   android:
@@ -20,6 +26,7 @@ jobs:
     env:
       LS_API: ${{ vars.LS_API || 'https://kids.springsprouts.net' }}
       KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v6
 
@@ -34,6 +41,12 @@ jobs:
 
       - uses: android-actions/setup-android@v4
 
+      - name: Stop if a release has no signing key
+        if: ${{ env.IS_RELEASE == 'true' && env.KEYSTORE_B64 == '' }}
+        run: |
+          echo "::error::Releases must be signed with the same key every time, or phones can't install updates. Add the ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD secrets (see docs/MAINTAINERS.md)."
+          exit 1
+
       - name: Install and prepare the app
         working-directory: mobile
         run: |
@@ -46,21 +59,25 @@ jobs:
       - name: Set version number
         working-directory: mobile/android
         run: |
-          # versionCode goes up by one on every run; Google Play needs it to keep increasing.
+          # versionCode must always go up; versionName comes from the tag (v2.1.0 → 2.1.0).
+          NAME="${GITHUB_REF_NAME#v}"
+          [ "$IS_RELEASE" = "true" ] || NAME="dev-${{ github.run_number }}"
           sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}/" app/build.gradle
-          sed -i "s/versionName \"[^\"]*\"/versionName \"2.0.${{ github.run_number }}\"/" app/build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"$NAME\"/" app/build.gradle
           grep -E "versionCode|versionName" app/build.gradle
 
       - name: Build test APK
+        if: ${{ env.IS_RELEASE != 'true' }}
         working-directory: mobile/android
         run: ./gradlew --no-daemon assembleDebug
 
       - uses: actions/upload-artifact@v6
+        if: ${{ env.IS_RELEASE != 'true' }}
         with:
-          name: little-screen-debug-apk
+          name: little-screen-test-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Build signed release (only when signing secrets are set)
+      - name: Build signed APK and bundle
         if: ${{ env.KEYSTORE_B64 != '' }}
         working-directory: mobile/android
         env:
@@ -74,10 +91,27 @@ jobs:
             -Pandroid.injected.signing.store.password="$KS_PASS" \
             -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$KEY_PASS"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp app/build/outputs/apk/release/*.apk "$RUNNER_TEMP/out/little-screen.apk"
+          cp app/build/outputs/bundle/release/*.aab "$RUNNER_TEMP/out/little-screen.aab"
+          rm -f "$RUNNER_TEMP/release.jks"
+          (cd "$RUNNER_TEMP/out" && sha256sum little-screen.apk little-screen.aab > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
       - uses: actions/upload-artifact@v6
-        if: ${{ env.KEYSTORE_B64 != '' }}
+        if: ${{ env.KEYSTORE_B64 != '' && env.IS_RELEASE != 'true' }}
         with:
-          name: little-screen-release
-          path: |
-            mobile/android/app/build/outputs/apk/release/*.apk
-            mobile/android/app/build/outputs/bundle/release/*.aab
+          name: little-screen-signed
+          path: ${{ runner.temp }}/out/
+
+      - name: Publish GitHub release
+        if: ${{ env.IS_RELEASE == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILES=("$RUNNER_TEMP/out/little-screen.apk" "$RUNNER_TEMP/out/little-screen.aab" "$RUNNER_TEMP/out/SHA256SUMS.txt")
+          # Works both for a tag pushed with git and for a release published on GitHub's website.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${FILES[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" "${FILES[@]}" --title "Little Screen $GITHUB_REF_NAME" --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"
+          fi
