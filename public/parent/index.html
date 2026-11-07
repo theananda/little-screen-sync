@@ -20,6 +20,14 @@
 .req-actions{display:flex;flex-wrap:wrap;gap:8px;width:100%}
 .auth{max-width:420px;margin:0 auto;padding-block:48px}
 .status{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+#tabBody{display:grid;grid-template-columns:minmax(0,1fr);gap:20px;min-width:0}
+.btn.google{background:var(--surface);color:var(--fg);gap:10px;width:100%}
+.auth a:not(.btn){color:var(--accent)}
+.btn.google svg{width:20px;height:20px}
+.or{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:.85rem}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+.linkbtn{background:none;border:0;padding:4px 2px;color:var(--accent);font-weight:700;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.pw-label{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 @media (max-width:420px){.bar .pill{display:none}}
 </style>
 </head>
@@ -46,11 +54,20 @@ const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="5" widt
 const OUT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/></svg>`;
 
 let ME = undefined, TAB = location.hash.slice(1) || "requests", authMode = "login";
+let OPTS = { google: false, reset: false }, authNote = "";
+// One-time values that arrive in the address: a reset token or a Google sign-in error.
+const QS = new URLSearchParams(location.search);
+let RESET_TOKEN = QS.get("reset") || "";
+if (QS.get("auth_error")) authNote = QS.get("auth_error");
+if (RESET_TOKEN) authMode = "reset";
+if (location.search) history.replaceState(null, "", location.pathname + location.hash);
 const TABS = [["requests", "Requests"], ["allow", "Allowed channels"], ["block", "Blocked channels"], ["videos", "Single videos"], ["words", "Blocked words"], ["devices", "Devices"], ["settings", "Settings"]];
 if (!TABS.some(t => t[0] === TAB)) TAB = "requests";
 let cache = { requests: null, devices: null, preview: null, code: null };
 
 async function boot() {
+  try { OPTS = await api("GET", "/api/auth/options"); } catch {}
+  if (RESET_TOKEN) { ME = null; render(); return; }
   try { ME = await api("GET", "/api/me"); } catch { ME = null; }
   render();
 }
@@ -64,34 +81,77 @@ function render() {
 }
 
 /* ---------- auth ---------- */
+const GOOGLE_G = `<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>`;
+const tz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } };
 function authHTML() {
+  const head = (t, sub) => `<div class="brand" style="padding:0">${LOGO}<span>Little Screen</span></div><div><h1>${t}</h1><p class="muted small" style="margin-top:6px">${sub}</p></div>`;
+  const note = authNote ? `<div class="msg bad">${esc(authNote)}</div>` : "";
+  const foot = `<p class="small muted" style="text-align:center"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>`;
+  if (authMode === "forgot") return `<div class="wrap auth"><div class="panel">
+    ${head("Reset your password", "Enter the email you signed up with. We'll send a link to choose a new password.")}
+    <form id="forgotForm" class="field" style="gap:12px" novalidate>
+      <div class="field"><label for="em">Email</label><input id="em" type="email" autocomplete="email" required></div>
+      <div id="authMsg"></div>
+      <button class="btn primary">Send reset link</button>
+    </form>
+    <p class="small muted" style="text-align:center"><button class="linkbtn" data-mode="login">Back to sign in</button></p>${foot}</div></div>`;
+  if (authMode === "reset") return `<div class="wrap auth"><div class="panel">
+    ${head("Choose a new password", "You'll be signed out on other devices and signed in here.")}
+    <form id="resetForm" class="field" style="gap:12px" novalidate>
+      <div class="field"><label for="pw">New password</label><input id="pw" type="password" autocomplete="new-password" required minlength="8"><span class="muted small">At least 8 characters.</span></div>
+      <div class="field"><label for="pw2">Type it again</label><input id="pw2" type="password" autocomplete="new-password" required minlength="8"></div>
+      <div id="authMsg"></div>
+      <button class="btn primary">Save new password</button>
+    </form>
+    <p class="small muted" style="text-align:center"><button class="linkbtn" data-mode="login">Back to sign in</button></p>${foot}</div></div>`;
   const signup = authMode === "signup";
   return `<div class="wrap auth"><div class="panel">
-    <div class="brand" style="padding:0">${LOGO}<span>Little Screen</span></div>
-    <div><h1>${signup ? "Create a parent account" : "Parent sign in"}</h1>
-    <p class="muted small" style="margin-top:6px">${signup ? "Manage what your children can watch from any phone or computer." : "Manage channels, requests and devices."}</p></div>
+    ${head(signup ? "Create a parent account" : "Parent sign in", signup ? "Manage what your children can watch from any phone or computer." : "Manage channels, requests and devices.")}
+    ${note}
+    ${OPTS.google ? `<a class="btn google" href="/api/auth/google?tz=${encodeURIComponent(tz())}">${GOOGLE_G}<span>Continue with Google</span></a><div class="or">or use email</div>` : ""}
     <form id="authForm" class="field" style="gap:12px" novalidate>
       <div class="field"><label for="em">Email</label><input id="em" type="email" autocomplete="email" required></div>
-      <div class="field"><label for="pw">Password</label><input id="pw" type="password" autocomplete="${signup ? "new-password" : "current-password"}" required minlength="8">${signup ? `<span class="muted small">At least 8 characters.</span>` : ""}</div>
+      <div class="field"><div class="pw-label"><label for="pw">Password</label>${!signup && OPTS.reset ? `<button type="button" class="linkbtn small" data-mode="forgot">Forgot password?</button>` : ""}</div>
+        <input id="pw" type="password" autocomplete="${signup ? "new-password" : "current-password"}" required minlength="8">${signup ? `<span class="muted small">At least 8 characters.</span>` : ""}</div>
       <div id="authMsg"></div>
       <button class="btn primary">${signup ? "Create account" : "Sign in"}</button>
     </form>
-    <p class="small muted" style="text-align:center">${signup ? "Already have an account?" : "New here?"} <button class="btn ghost sm" id="authSwap" style="display:inline-flex">${signup ? "Sign in" : "Create an account"}</button></p>
-    <p class="small muted" style="text-align:center"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>
+    <p class="small muted" style="text-align:center">${signup ? "Already have an account?" : "New here?"} <button class="linkbtn" data-mode="${signup ? "login" : "signup"}">${signup ? "Sign in" : "Create an account"}</button></p>
+    ${foot}
   </div></div>`;
 }
 function wireAuth() {
-  $("#authSwap").onclick = () => { authMode = authMode === "login" ? "signup" : "login"; render(); };
-  $("#authForm").onsubmit = async e => {
-    e.preventDefault();
-    const btn = e.target.querySelector("button.primary"); btn.disabled = true;
+  $$("[data-mode]").forEach(b => b.onclick = () => {
+    const keep = $("#em")?.value || "";
+    authMode = b.dataset.mode; authNote = ""; if (authMode !== "reset") RESET_TOKEN = "";
+    render(); if ($("#em") && keep) $("#em").value = keep;
+  });
+  const busy = (f, on) => { const b = f.querySelector("button.primary"); if (b) b.disabled = on; };
+  const fail = (f, err) => { $("#authMsg").innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; busy(f, false); };
+  $("#authForm")?.addEventListener("submit", async e => {
+    e.preventDefault(); busy(e.target, true);
     try {
-      await api("POST", authMode === "signup" ? "/api/auth/signup" : "/api/auth/login",
-        { email: $("#em").value, password: $("#pw").value, tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      await api("POST", authMode === "signup" ? "/api/auth/signup" : "/api/auth/login", { email: $("#em").value, password: $("#pw").value, tz: tz() });
       if (authMode === "signup") TAB = "allow";
-      await boot();
-    } catch (err) { $("#authMsg").innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; btn.disabled = false; }
-  };
+      authNote = ""; await boot();
+    } catch (err) { fail(e.target, err); }
+  });
+  $("#forgotForm")?.addEventListener("submit", async e => {
+    e.preventDefault(); busy(e.target, true);
+    try {
+      await api("POST", "/api/auth/forgot", { email: $("#em").value });
+      e.target.innerHTML = `<div class="msg good">If <b>${esc($("#em").value)}</b> has an account, a reset link is on its way. Check your inbox and spam folder (and Telegram, if you linked it). The link works for 1 hour.</div>`;
+    } catch (err) { fail(e.target, err); }
+  });
+  $("#resetForm")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    if ($("#pw").value !== $("#pw2").value) return fail(e.target, new Error("The two passwords don't match."));
+    busy(e.target, true);
+    try {
+      await api("POST", "/api/auth/reset", { token: RESET_TOKEN, password: $("#pw").value });
+      RESET_TOKEN = ""; authMode = "login"; await boot(); toast("Password saved. You're signed in.");
+    } catch (err) { fail(e.target, err); }
+  });
 }
 
 /* ---------- shell ---------- */
@@ -259,16 +319,17 @@ async function tabSettings(body) {
       : `<p class="muted small">Get each request in Telegram and answer it with one tap.</p><div><button class="btn primary" id="tgLink">Link Telegram</button></div><div id="tgOut"></div>`}
   </div>
   <div class="panel"><h2>Account</h2>
-    <p class="muted small">Signed in as <b>${esc(ME.email)}</b></p>
+    <p class="muted small">Signed in as <b>${esc(ME.email)}</b> ${ME.google ? `<span class="pill ok">Google linked</span>` : ""}</p>
+    ${!ME.hasPassword ? `<p class="muted small">You sign in with Google. Add a password if you also want to sign in with your email.</p>` : ""}
     <form id="pwForm" class="field" style="gap:10px">
-      <div class="field"><label for="pwCur">Current password</label><input id="pwCur" type="password" autocomplete="current-password"></div>
-      <div class="field"><label for="pwNew">New password</label><input id="pwNew" type="password" autocomplete="new-password" minlength="8"></div>
-      <div><button class="btn">Change password</button></div>
+      ${ME.hasPassword ? `<div class="field"><label for="pwCur">Current password</label><input id="pwCur" type="password" autocomplete="current-password"></div>` : ""}
+      <div class="field"><label for="pwNew">${ME.hasPassword ? "New password" : "Password"}</label><input id="pwNew" type="password" autocomplete="new-password" minlength="8"></div>
+      <div><button class="btn">${ME.hasPassword ? "Change password" : "Add password"}</button></div>
     </form>
   </div>
   <div class="panel"><h2>Delete account</h2>
     <p class="muted small">Permanently deletes your account, rules, devices and request history. Paired devices stop working.</p>
-    <form id="delForm" class="row"><input id="delPw" type="password" autocomplete="current-password" placeholder="Your password" aria-label="Password to confirm"><button class="btn danger" id="delBtn">Delete my account</button></form>
+    <form id="delForm" class="row">${ME.hasPassword ? `<input id="delPw" type="password" autocomplete="current-password" placeholder="Your password" aria-label="Password to confirm">` : `<input id="delPw" type="text" autocomplete="off" placeholder="Type ${esc(ME.email)} to confirm" aria-label="Type your email to confirm">`}<button class="btn danger" id="delBtn">Delete my account</button></form>
     <div id="delMsg"></div>
   </div>`;
   const setRules = async (patch, msg) => { try { await api("PUT", "/api/rules/settings", patch); await refreshMe(); toast(msg); } catch (e) { toast(e.message); } };
@@ -282,12 +343,12 @@ async function tabSettings(body) {
     catch (err) { toast(err.message); }
   });
   $("#tgUnlink")?.addEventListener("click", async () => { await api("DELETE", "/api/telegram"); await refreshMe(); render(); toast("Telegram unlinked"); });
-  $("#pwForm").onsubmit = async e => { e.preventDefault(); try { await api("PUT", "/api/account/password", { current: $("#pwCur").value, next: $("#pwNew").value }); toast("Password changed"); e.target.reset(); } catch (err) { toast(err.message); } };
+  $("#pwForm").onsubmit = async e => { e.preventDefault(); try { await api("PUT", "/api/account/password", { current: $("#pwCur")?.value || "", next: $("#pwNew").value }); toast(ME.hasPassword ? "Password changed" : "Password added"); await refreshMe(); render(); } catch (err) { toast(err.message); } };
   let armed = 0;
   $("#delForm").onsubmit = async e => {
     e.preventDefault();
     if (Date.now() - armed > 5000) { armed = Date.now(); $("#delBtn").textContent = "Tap again to delete forever"; return; }
-    try { await api("DELETE", "/api/account", { password: $("#delPw").value }); ME = null; authMode = "signup"; render(); toast("Your account was deleted."); }
+    try { await api("DELETE", "/api/account", ME.hasPassword ? { password: $("#delPw").value } : { confirm: $("#delPw").value }); ME = null; authMode = "signup"; render(); toast("Your account was deleted."); }
     catch (err) { $("#delMsg").innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; $("#delBtn").textContent = "Delete my account"; armed = 0; }
   };
 }
