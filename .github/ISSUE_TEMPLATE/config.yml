@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help setting up
+    url: https://github.com/OWNER/REPO/discussions
+    about: Ask in Discussions, where other parents and self-hosters can help too.
+  - name: Security problem
+    url: https://github.com/OWNER/REPO/security/advisories/new
+    about: Report vulnerabilities privately, please, not as a public issue.

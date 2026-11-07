@@ -1,0 +1,37 @@
+name: Bug report
+description: Something isn't working as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for reporting! Please don't include children's names, photos or other private details."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where?
+      options: [Child app, Parent dashboard, Android app (APK), Home page, Server / self-hosting, Other]
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and browser
+      placeholder: e.g. Samsung Tab A8, Android 14, Little Screen app v2.0.0
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open …\n2. Tap …\n3. See …"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages or logs
+      description: Copy any red error text. If you self-host, include relevant Railway log lines. Remove keys and email addresses first.
+      render: text
