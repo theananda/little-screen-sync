@@ -1,0 +1,24 @@
+# Publishes a signed Android release when a version tag is pushed, e.g.:
+#   git tag v2.1.0 && git push origin v2.1.0
+# The build itself lives in android.yml.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  release:
+    types: [published]   # also works when you publish a release on GitHub's website
+
+permissions:
+  contents: write
+
+# Publishing on the website can fire both triggers; keep only one build per version.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    uses: ./.github/workflows/android.yml
+    secrets: inherit
