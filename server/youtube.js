@@ -17,14 +17,40 @@ async function yt(path, params) {
   const u = new URL(path, API_BASE);
   for (const k in params) u.searchParams.set(k, params[k]);
   u.searchParams.set("key", KEY);
-  const r = await fetch(u, { signal: AbortSignal.timeout(10000) });
+  let r;
+  try { r = await fetch(u, { signal: AbortSignal.timeout(10000) }); }
+  catch { throw new UserError("The server couldn't reach YouTube just now. Try again in a minute."); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const reason = j.error?.errors?.[0]?.reason;
-    if (reason === "quotaExceeded") throw new UserError("Today's YouTube quota is used up. New videos will load again after midnight Pacific time.");
-    throw new Error(j.error?.message || "YouTube returned error " + r.status);
+    console.warn("YouTube API", r.status, JSON.stringify(j.error || {}).slice(0, 500));
+    throw new UserError(explainYouTubeError(r.status, j.error || {}));
   }
   return j;
+}
+
+// Turns YouTube's error into a sentence the parent (or whoever runs the server) can act on.
+export function explainYouTubeError(status, err) {
+  const reasons = [
+    ...(err.errors || []).map(e => e.reason),
+    ...(err.details || []).map(d => d.reason)
+  ].filter(Boolean).map(String);
+  const has = (...k) => k.some(x => reasons.includes(x));
+  const msg = String(err.message || "");
+  if (has("quotaExceeded", "dailyLimitExceeded", "RATE_LIMIT_EXCEEDED"))
+    return "Today's YouTube quota is used up. New videos will load again after midnight Pacific time.";
+  if (has("API_KEY_HTTP_REFERRER_BLOCKED") || /referer/i.test(msg))
+    return "The YouTube API key only works from websites, so the server can't use it. In Google Cloud Console → Credentials, open the key and set Application restrictions to None.";
+  if (has("API_KEY_IP_ADDRESS_BLOCKED", "API_KEY_ANDROID_APP_BLOCKED", "API_KEY_IOS_APP_BLOCKED"))
+    return "The YouTube API key is limited to certain apps or addresses, so the server can't use it. In Google Cloud Console → Credentials, set the key's Application restrictions to None.";
+  if (has("API_KEY_SERVICE_BLOCKED"))
+    return "The API key isn't allowed to use the YouTube Data API. In Google Cloud Console → Credentials, add “YouTube Data API v3” to the key's API restrictions.";
+  if (has("accessNotConfigured", "SERVICE_DISABLED"))
+    return "The YouTube Data API v3 isn't turned on for this Google Cloud project. Enable it under APIs & Services → Library.";
+  if (has("keyInvalid", "API_KEY_INVALID", "badRequest") && /key/i.test(msg))
+    return "The YouTube API key on the server isn't valid. Check YT_API_KEY in Railway for typos or extra spaces.";
+  if (status === 404 || has("playlistNotFound", "channelNotFound", "videoNotFound"))
+    return "YouTube couldn't find that. Check the link or @handle.";
+  return `YouTube refused the request (${status}${msg ? ": " + msg.slice(0, 140) : ""}).`;
 }
 
 function isoDur(s) {
