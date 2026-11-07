@@ -1,4 +1,4 @@
-# Little Screen Sync — synced, store-ready
+# Little Screen
 
 Parents manage everything from their own phone or computer. Children's devices pick up changes within a minute.
 
