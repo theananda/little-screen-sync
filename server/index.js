@@ -1,3 +1,4 @@
+import "./env.js";   // must stay first: tidies PUBLIC_URL before other modules read it
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
