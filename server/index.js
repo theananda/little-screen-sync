@@ -484,7 +484,14 @@ app.post("/api/telegram/webhook", async (req, res) => {
 
 /* ---------- static pages ---------- */
 const pub = path.join(__dirname, "..", "public");
-app.get("/", (req, res) => res.redirect("/parent/"));
+// Public site settings for the home page (APK link, source code link).
+app.get("/api/site", (req, res) => {
+  const repo = /^[\w.-]+\/[\w.-]+$/.test(process.env.GITHUB_REPO || "") ? process.env.GITHUB_REPO : "";
+  const apk = process.env.APK_URL || (repo ? `https://github.com/${repo}/releases/latest/download/little-screen.apk` : "");
+  res.set("Cache-Control", "public, max-age=300");
+  res.json({ repo: repo ? `https://github.com/${repo}` : "", apk, releases: repo ? `https://github.com/${repo}/releases` : "" });
+});
+app.get("/app/sw.js", (req, res, next) => { res.set("Service-Worker-Allowed", "/app/"); res.set("Cache-Control", "no-cache"); next(); });
 app.get("/app/base.css", (req, res) => res.sendFile(path.join(pub, "base.css")));
 app.use(express.static(pub, { extensions: ["html"], maxAge: PROD ? "1h" : 0 }));
 app.get("/healthz", async (req, res) => { await q("select 1"); res.json({ ok: true, ytKey: hasKey(), telegram: tg.enabled(), google: google.enabled(), email: mail.enabled() }); });
