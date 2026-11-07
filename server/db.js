@@ -60,6 +60,13 @@ create table if not exists channel_cache (
   items jsonb not null default '[]'::jsonb,
   fetched_at timestamptz not null default now()
 );
+alter table families add column if not exists google_sub text unique;
+alter table families alter column pass_hash drop not null;
+create table if not exists password_resets (
+  token_hash text primary key,
+  family_id uuid not null references families(id) on delete cascade,
+  expires_at timestamptz not null
+);
 create table if not exists video_cache (
   video_id text primary key,
   data jsonb not null,
@@ -74,5 +81,6 @@ export async function purge() {
   await q("delete from channel_cache where fetched_at < now() - interval '30 days'");
   await q("delete from video_cache where fetched_at < now() - interval '30 days'");
   await q("delete from pair_codes where expires_at < now()");
+  await q("delete from password_resets where expires_at < now()");
   await q("delete from sessions where created_at < now() - interval '60 days'");
 }
