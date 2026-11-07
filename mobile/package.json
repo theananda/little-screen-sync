@@ -9,7 +9,8 @@
     "add:android": "npx cap add android",
     "sync": "node build-web.mjs && npx cap sync",
     "open:ios": "npx cap open ios",
-    "open:android": "npx cap open android"
+    "open:android": "npx cap open android",
+    "assets": "npx @capacitor/assets@3.0.5 generate --iconBackgroundColor '#1f8a5b' --iconBackgroundColorDark '#1f8a5b' --splashBackgroundColor '#f2f6f4' --splashBackgroundColorDark '#0f1a1d'"
   },
   "dependencies": {
     "@capacitor/android": "8.5.3",
