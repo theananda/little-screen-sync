@@ -71,7 +71,7 @@ jobs:
         working-directory: mobile/android
         run: ./gradlew --no-daemon assembleDebug
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: ${{ env.IS_RELEASE != 'true' }}
         with:
           name: little-screen-test-apk
@@ -97,7 +97,7 @@ jobs:
           rm -f "$RUNNER_TEMP/release.jks"
           (cd "$RUNNER_TEMP/out" && sha256sum little-screen.apk little-screen.aab > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: ${{ env.KEYSTORE_B64 != '' && env.IS_RELEASE != 'true' }}
         with:
           name: little-screen-signed
