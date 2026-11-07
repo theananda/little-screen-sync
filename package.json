@@ -10,7 +10,7 @@
     "dev": "node --watch server/index.js"
   },
   "dependencies": {
-    "express": "5.1.0",
+    "express": "5.3.0",
     "pg": "8.16.3"
   }
 }
